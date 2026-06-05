@@ -24,6 +24,7 @@ NEIS_BASE_URL = "https://open.neis.go.kr/hub"
 SCHOOL_NAME = "\uae40\ud3ec\uace0\ub4f1\ud559\uad50"
 DATA_FILE = os.path.join(os.path.dirname(__file__), "users.json")
 ENV_FILE = os.path.join(os.path.dirname(__file__), ".env")
+APP_VERSION = "calendar-native-1"
 
 if load_dotenv:
     load_dotenv(ENV_FILE, override=True)
@@ -48,6 +49,13 @@ def get_env_value(name):
 
 
 OPENAI_MODEL = get_env_value("OPENAI_MODEL") or "gpt-4.1-nano"
+
+
+def render_html(html):
+    if hasattr(st, "html"):
+        st.html(html)
+    else:
+        st.markdown(html, unsafe_allow_html=True)
 
 
 def load_db():
@@ -517,6 +525,46 @@ def format_important_month_list(rows):
     )
 
 
+def render_month_calendar_native(selected_date, rows, personal_by_date=None):
+    personal_by_date = personal_by_date or {}
+    start, end = month_bounds(selected_date)
+    by_date = {}
+    for row in rows:
+        date_text = row.get("AA_YMD", "")
+        if len(date_text) == 8:
+            key = f"{date_text[:4]}-{date_text[4:6]}-{date_text[6:]}"
+            by_date.setdefault(key, []).append(row)
+
+    st.subheader(f"{selected_date.year}\ub144 {selected_date.month}\uc6d4")
+    for column, label in zip(st.columns(7), ["\uc6d4", "\ud654", "\uc218", "\ubaa9", "\uae08", "\ud1a0", "\uc77c"]):
+        column.markdown(f"**{label}**")
+
+    cells = [None] * start.weekday()
+    cells.extend(start.replace(day=day) for day in range(1, end.day + 1))
+    while len(cells) % 7 != 0:
+        cells.append(None)
+
+    for week_start in range(0, len(cells), 7):
+        columns = st.columns(7)
+        for column, current in zip(columns, cells[week_start:week_start + 7]):
+            with column.container(border=True):
+                if current is None:
+                    st.write("")
+                    continue
+
+                date_key = current.strftime("%Y-%m-%d")
+                day_label = f"**{current.day}**"
+                if current == selected_date:
+                    day_label += "  \uc120\ud0dd"
+                st.markdown(day_label)
+
+                school_events = [row for row in by_date.get(date_key, []) if is_important_schedule(row)]
+                for row in school_events[:2]:
+                    st.caption(row.get("EVENT_NM", ""))
+                for event in personal_by_date.get(date_key, [])[:3]:
+                    st.markdown(f"- {event.get('title', '')}")
+
+
 def format_personal_events(events, selected_date):
     if not events:
         return f"{selected_date.strftime('%Y-%m-%d')} \uac1c\uc778 \uc77c\uc815\uc774 \uc5c6\uc2b5\ub2c8\ub2e4."
@@ -845,6 +893,9 @@ st.markdown(
 
 if "student_id" not in st.session_state:
     st.session_state.student_id = None
+if st.session_state.get("app_version") != APP_VERSION:
+    st.session_state.messages = []
+    st.session_state.app_version = APP_VERSION
 
 st.markdown(
     """
@@ -905,40 +956,56 @@ with st.sidebar:
     if st.button("\ub85c\uadf8\uc544\uc6c3", use_container_width=True):
         st.session_state.student_id = None
         st.rerun()
-
-    st.divider()
-    selected_date = st.date_input("\uce98\ub9b0\ub354", value=dt.date.today())
-
-    if "show_delete_panel" not in st.session_state:
-        st.session_state.show_delete_panel = False
-    if st.button("\uc77c\uc815 \uc0ad\uc81c \uad00\ub9ac", use_container_width=True):
-        st.session_state.show_delete_panel = not st.session_state.show_delete_panel
+    if st.button("\ucc44\ud305 \uc9c0\uc6b0\uae30", use_container_width=True):
+        st.session_state.messages = []
         st.rerun()
 
-    if st.session_state.show_delete_panel:
-        personal_events = get_personal_events(st.session_state.student_id, selected_date)
-        if personal_events:
-            labels = [event["title"] for event in personal_events]
-            selected_label = st.selectbox("\uc0ad\uc81c\ud560 \uc77c\uc815", labels)
-            if st.button("\uc120\ud0dd \uc77c\uc815 \uc0ad\uc81c", use_container_width=True):
-                delete_personal_event(st.session_state.student_id, selected_date, labels.index(selected_label))
-                st.rerun()
-        else:
-            st.caption("\uc120\ud0dd\ud55c \ub0a0\uc9dc\uc5d0 \uc0ad\uc81c\ud560 \uc77c\uc815\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.")
+    st.divider()
+    if "show_calendar" not in st.session_state:
+        st.session_state.show_calendar = False
+    if "selected_date" not in st.session_state:
+        st.session_state.selected_date = dt.date.today()
 
-school_for_calendar = get_school()
-month_start, month_end = month_bounds(selected_date)
-month_rows = get_schedules(
-    school_for_calendar["office_code"],
-    school_for_calendar["school_code"],
-    month_start,
-    month_end,
-)
-personal_by_date = get_month_personal_events(st.session_state.student_id, selected_date)
-st.markdown(format_month_calendar(selected_date, month_rows, personal_by_date), unsafe_allow_html=True)
+    if st.button("\uce98\ub9b0\ub354", use_container_width=True):
+        st.session_state.show_calendar = not st.session_state.show_calendar
+        st.rerun()
+
+    if st.session_state.show_calendar:
+        selected_date = st.date_input("\ub0a0\uc9dc", value=st.session_state.selected_date)
+        st.session_state.selected_date = selected_date
+
+        if "show_delete_panel" not in st.session_state:
+            st.session_state.show_delete_panel = False
+        if st.button("\uc77c\uc815 \uc0ad\uc81c \uad00\ub9ac", use_container_width=True):
+            st.session_state.show_delete_panel = not st.session_state.show_delete_panel
+            st.rerun()
+
+        if st.session_state.show_delete_panel:
+            personal_events = get_personal_events(st.session_state.student_id, selected_date)
+            if personal_events:
+                labels = [event["title"] for event in personal_events]
+                selected_label = st.selectbox("\uc0ad\uc81c\ud560 \uc77c\uc815", labels)
+                if st.button("\uc120\ud0dd \uc77c\uc815 \uc0ad\uc81c", use_container_width=True):
+                    delete_personal_event(st.session_state.student_id, selected_date, labels.index(selected_label))
+                    st.rerun()
+            else:
+                st.caption("\uc120\ud0dd\ud55c \ub0a0\uc9dc\uc5d0 \uc0ad\uc81c\ud560 \uc77c\uc815\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.")
+
+if st.session_state.show_calendar:
+    selected_date = st.session_state.selected_date
+    school_for_calendar = get_school()
+    month_start, month_end = month_bounds(selected_date)
+    month_rows = get_schedules(
+        school_for_calendar["office_code"],
+        school_for_calendar["school_code"],
+        month_start,
+        month_end,
+    )
+    personal_by_date = get_month_personal_events(st.session_state.student_id, selected_date)
+    render_month_calendar_native(selected_date, month_rows, personal_by_date)
 
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "\ubb34\uc5c7\uc744 \ud655\uc778\ud560\uae4c\uc694?"}]
+    st.session_state.messages = []
 
 notice_key = f"today_notice_{st.session_state.student_id}_{dt.date.today().isoformat()}"
 if st.session_state.student_id and not st.session_state.get(notice_key):
@@ -950,7 +1017,7 @@ if st.session_state.student_id and not st.session_state.get(notice_key):
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         if message["role"] == "assistant" and message["content"].lstrip().startswith("<"):
-            st.markdown(f'<div class="answer">{message["content"]}</div>', unsafe_allow_html=True)
+            render_html(f'<div class="answer">{message["content"]}</div>')
         else:
             st.markdown(message["content"])
 
@@ -973,7 +1040,7 @@ if question:
                 answer = "\uae40\ud3ec\uace0, \ud559\uad50\uc0dd\ud65c, \uae09\uc2dd, \ud559\uc0ac\uc77c\uc815, \uac1c\uc778 \uc77c\uc815\uacfc \uad00\ub828\ub41c \uc9c8\ubb38\ub9cc \ub2f5\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4."
             else:
                 answer = answer_general_chat(question)
-            st.markdown(f'<div class="answer">{answer}</div>', unsafe_allow_html=True)
+            render_html(f'<div class="answer">{answer}</div>')
         except Exception as exc:
             answer = f"\uac00\uc838\uc624\ub294 \uc911 \uc624\ub958\uac00 \ub0ac\uc2b5\ub2c8\ub2e4: {exc}"
             st.error(answer)
